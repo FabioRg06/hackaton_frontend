@@ -39,12 +39,46 @@ function getToolMessage(part: {
   const hasOutput = (part.state === 'output-available' || (part as any).state === 'output-available') && part.output
   if (!hasOutput) return ''
 
-  if (part.output!.type === 'count' && typeof part.output!.total === 'number') {
-    return `Hay ${new Intl.NumberFormat('es-CO').format(part.output!.total as number)} contratos en total.`
+  const out = part.output!
+  const fmt = (n: number) => new Intl.NumberFormat('es-CO').format(n)
+
+  if (out.type === 'count' && typeof out.total === 'number') {
+    return `Hay ${fmt(out.total as number)} contratos en total.`
   }
 
-  if (part.output!.type === 'contract-list' && typeof part.output!.count === 'number') {
-    return `Encontré ${new Intl.NumberFormat('es-CO').format(part.output!.count as number)} contratos para tu consulta.`
+  if (out.type === 'contract-list' && typeof out.count === 'number') {
+    return `Encontré ${fmt(out.count as number)} contratos para tu consulta.`
+  }
+
+  if ((out.type === 'secop-full-list' || out.type === 'secop-table') && typeof out.count === 'number') {
+    const label = typeof out.label === 'string' ? out.label : `Resultados SECOP (${fmt(out.count as number)} registros)`
+    return `✓ ${label}`
+  }
+
+  if (out.type === 'secop-chart') {
+    const title = typeof out.title === 'string' ? out.title : 'Gráfica generada'
+    return `✓ Gráfica: ${title}`
+  }
+
+  if (out.type === 'high-risk-contract-list') {
+    const total = typeof out.total === 'number' ? fmt(out.total as number) : '?'
+    return `✓ Contratos de alto riesgo cargados (${total} resultados)`
+  }
+
+  if (out.type === 'analysis-report') {
+    return `✓ Informe de análisis generado`
+  }
+
+  if (out.type === 'entity-list' && Array.isArray(out.entities)) {
+    return `✓ ${(out.entities as unknown[]).length} entidades encontradas`
+  }
+
+  if (out.type === 'field-values' && typeof out.campo === 'string') {
+    return `✓ Valores del campo "${out.campo}" cargados`
+  }
+
+  if (out.type === 'schema-info') {
+    return `✓ Estructura de datos SECOP II cargada`
   }
 
   return ''

@@ -65,8 +65,17 @@ export async function POST(req: Request) {
 
     const result = streamText({
       model: openrouter(CHAT_MODEL),
-      system: `Eres el Asistente de Auditoria de Contratos Publicos de Colombia (GobIA).
+      providerOptions: {
+        openai: {
+          // Disable Qwen3 extended-thinking mode so the model always produces
+          // a visible text response after tool calls (not just reasoning tokens).
+          enable_thinking: false,
+        },
+      },
+      system: `/nothink
+Eres el Asistente de Auditoria de Contratos Publicos de Colombia (GobIA).
 Responde siempre en español.
+IMPORTANTE: Después de llamar a cualquier herramienta y recibir sus resultados, SIEMPRE escribe una respuesta de texto clara y concisa al usuario resumiendo lo que encontraste. Nunca termines un turno sin generar al menos una oración de texto visible.
 Tienes acceso a la API SECOP II (${SECOP_SCHEMA_HINT}).
 Cuando el usuario pida cualquier análisis, listado, conteo o visualización de contratos, USA la herramienta consultar_secop con los parámetros SoQL adecuados.
 Cuando el usuario pida contratos de mayor riesgo, alto riesgo, mas alertas, o similares Y la base interna esté disponible, USA contratos_alto_riesgo; si no, USA consultar_secop con $order por precio_base DESC.
