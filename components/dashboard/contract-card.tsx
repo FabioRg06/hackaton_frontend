@@ -1,5 +1,6 @@
 'use client'
 
+import { memo } from 'react'
 import { motion } from 'framer-motion'
 import { Building2, Calendar, User, ExternalLink, AlertTriangle } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -15,15 +16,15 @@ interface ContractCardProps {
   index?: number
 }
 
-export function ContractCard({ contract, onClick, index = 0 }: ContractCardProps) {
+export const ContractCard = memo(function ContractCard({ contract, onClick, index = 0 }: ContractCardProps) {
   const { riskAnalysis } = contract
   const topFlags = riskAnalysis.flags.slice(0, 2)
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: index * 0.05 }}
+      transition={{ duration: 0.22, delay: Math.min(index, 8) * 0.04 }}
     >
       <Card
         className={cn(
@@ -149,7 +150,7 @@ export function ContractCard({ contract, onClick, index = 0 }: ContractCardProps
       </Card>
     </motion.div>
   )
-}
+})
 
 export function ContractCardSkeleton() {
   return (

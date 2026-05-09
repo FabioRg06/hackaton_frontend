@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Shield, Menu, X, Loader2, BarChart3, List, ChevronLeft, Building2, DollarSign, FileText, AlertTriangle, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -64,8 +64,16 @@ export default function HomePage() {
 
   const entities = backendEntities
 
-  // Total contract count across all loaded entities (shown on "Todas las Entidades" button)
-  const totalContratosGlobal = backendEntities.reduce((sum, e) => sum + e.count, 0)
+  // Memoised derived values — recompute only when inputs change
+  const totalContratosGlobal = useMemo(
+    () => backendEntities.reduce((sum, e) => sum + e.count, 0),
+    [backendEntities],
+  )
+
+  const selectedEntityData = useMemo(
+    () => entities.find((e) => e.nit === selectedEntity) ?? null,
+    [entities, selectedEntity],
+  )
 
   const entitiesLoading = backendEntitiesLoading && contracts.length === 0
 
@@ -88,18 +96,18 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedEntity]) // only re-create when the entity filter changes
 
-  const handleContractClick = (contract: ContractWithRisk) => {
+  const handleContractClick = useCallback((contract: ContractWithRisk) => {
     setSelectedContract(contract)
     setDynamicView({ mode: 'contract-detail', data: contract })
     setChatOpen(false)
-  }
+  }, [])
 
   // Reset dashboard toggle whenever the selected entity changes
   useEffect(() => {
     setShowEntityDashboard(false)
   }, [selectedEntity])
 
-  const handleDynamicUIChange = (mode: ViewMode, data: unknown) => {
+  const handleDynamicUIChange = useCallback((mode: ViewMode, data: unknown) => {
     setDynamicView({ mode, data })
     if (mode !== 'dashboard') {
       setChatExpanded(false)
@@ -107,12 +115,12 @@ export default function HomePage() {
     if (mode === 'contract-detail') {
       setChatOpen(false)
     }
-  }
+  }, [])
 
-  const handleBackToDashboard = () => {
+  const handleBackToDashboard = useCallback(() => {
     setDynamicView(null)
     setSelectedContract(null)
-  }
+  }, [])
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
@@ -145,13 +153,14 @@ export default function HomePage() {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar - Entity List */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {sidebarOpen && (
             <motion.aside
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 280, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.2 }}
+              initial={{ x: -280, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: -280, opacity: 0 }}
+              transition={{ duration: 0.2, ease: 'easeInOut' }}
+              style={{ width: 280, minWidth: 280 }}
               className="hidden shrink-0 border-r bg-card lg:block h-full overflow-hidden"
             >
               <EntityList
@@ -210,10 +219,10 @@ export default function HomePage() {
             {dynamicView ? (
               <motion.div
                 key="dynamic-view"
-                initial={{ opacity: 0, filter: 'blur(14px)', scale: 0.985 }}
-                animate={{ opacity: 1, filter: 'blur(0px)', scale: 1 }}
-                exit={{ opacity: 0, filter: 'blur(14px)', scale: 0.985 }}
-                transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.97 }}
+                transition={{ duration: 0.25, ease: [0.25, 0.46, 0.45, 0.94] }}
                 className="h-full"
               >
                 <DynamicUIRenderer
@@ -227,10 +236,10 @@ export default function HomePage() {
               /* ── All-entities grid ───────────────────────────────────── */
               <motion.div
                 key="entity-grid"
-                initial={{ opacity: 0, filter: 'blur(8px)' }}
-                animate={{ opacity: 1, filter: 'blur(0px)' }}
-                exit={{ opacity: 0, filter: 'blur(8px)' }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
                 className="p-4 lg:p-6"
               >
                 {/* ── Global stats dashboard ─────────────────────────── */}
@@ -366,10 +375,10 @@ export default function HomePage() {
               /* ── Selected-entity contract list ───────────────────────── */
               <motion.div
                 key={`entity-contracts-${selectedEntity}`}
-                initial={{ opacity: 0, filter: 'blur(8px)' }}
-                animate={{ opacity: 1, filter: 'blur(0px)' }}
-                exit={{ opacity: 0, filter: 'blur(8px)' }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
                 className="p-4 lg:p-6"
               >
                 {/* Breadcrumb */}
@@ -385,14 +394,14 @@ export default function HomePage() {
                 <div className="mb-6">
                   <div className="mb-1 flex items-center gap-2">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-sm font-semibold text-primary">
-                      {(entities.find((e) => e.nit === selectedEntity)?.name ?? 'E').charAt(0).toUpperCase()}
+                      {(selectedEntityData?.name ?? 'E').charAt(0).toUpperCase()}
                     </div>
                     <div>
                       <h2 className="text-xl font-semibold leading-tight">
-                        {entities.find((e) => e.nit === selectedEntity)?.name || 'Entidad'}
+                        {selectedEntityData?.name || 'Entidad'}
                       </h2>
                       <p className="text-xs text-muted-foreground">
-                        {entities.find((e) => e.nit === selectedEntity)?.count.toLocaleString('es-CO')} contratos en total
+                        {selectedEntityData?.count.toLocaleString('es-CO')} contratos en total
                         &nbsp;·&nbsp;NIT {selectedEntity}
                       </p>
                     </div>

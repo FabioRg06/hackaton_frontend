@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Building2, ChevronRight, Search, X, Loader2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -41,8 +41,9 @@ export function EntityList({
   const onLoadMoreRef = useRef(onLoadMore)
   onLoadMoreRef.current = onLoadMore
 
-  const filteredEntities = entities.filter((entity) =>
-    entity.name.toLowerCase().includes(search.toLowerCase())
+  const filteredEntities = useMemo(
+    () => entities.filter((entity) => entity.name.toLowerCase().includes(search.toLowerCase())),
+    [entities, search],
   )
 
   // IntersectionObserver for infinite scroll — root is the scroll container

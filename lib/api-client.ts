@@ -8,6 +8,31 @@ const BACKEND_URL =
   (process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001/api').replace(/\/$/, '')
 
 // ─────────────────────────────────────────────────────────────────────────────
+// In-memory GET cache — avoids redundant network calls for read-only endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _cache = new Map<string, { data: unknown; expiresAt: number }>()
+const CACHE_TTL = 5 * 60 * 1000 // 5 min
+
+async function cachedFetch<T>(url: string): Promise<T> {
+  const now = Date.now()
+  const hit = _cache.get(url)
+  if (hit && hit.expiresAt > now) return hit.data as T
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Backend error ${res.status}: ${url}`)
+  const data: T = await res.json()
+  _cache.set(url, { data, expiresAt: now + CACHE_TTL })
+  return data
+}
+
+/** Invalidate all cached entries whose URL starts with the given prefix. */
+export function invalidateCache(prefix: string) {
+  for (const key of _cache.keys()) {
+    if (key.startsWith(prefix)) _cache.delete(key)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Shared types (backend shapes)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -182,18 +207,14 @@ export async function fetchContracts(params: {
     ? `${BACKEND_URL}/entidades/${encodeURIComponent(nit)}/contratos?${qs}`
     : `${BACKEND_URL}/entidades/contratos?${qs}`
 
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`Backend error ${res.status}: ${url}`)
-  return res.json()
+  return cachedFetch<{ contratos: BackendContract[]; total: number; hasMore: boolean }>(url)
 }
 
 export async function fetchEntities(
   limit = 50,
   offset = 0,
 ): Promise<{ entidades: BackendEntity[]; total: number; hasMore: boolean }> {
-  const res = await fetch(`${BACKEND_URL}/entidades?limit=${limit}&offset=${offset}`)
-  if (!res.ok) throw new Error(`Backend error ${res.status}`)
-  return res.json()
+  return cachedFetch(`${BACKEND_URL}/entidades?limit=${limit}&offset=${offset}`)
 }
 
 /**

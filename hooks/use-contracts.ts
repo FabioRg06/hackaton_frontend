@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import type {
   ContractWithRisk,
   ContractFilters,
@@ -24,6 +24,9 @@ import { parseContractValue } from '@/lib/secop'
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SEVERITY_WEIGHT: Record<string, number> = { CRITICA: 30, ALTA: 20, MEDIA: 10, BAJA: 5 }
+
+// Module-level cache so the same backend contract is never re-mapped twice
+const _contractMappingCache = new Map<string, ContractWithRisk>()
 
 function computeScore(flags: BackendFlag[]): number {
   if (!flags.length) return 0
@@ -49,6 +52,8 @@ function mapFlags(flags: BackendFlag[]): RedFlag[] {
 }
 
 export function mapBackendContract(c: BackendContract): ContractWithRisk {
+  const cacheKey = c.id_proceso ?? ''
+  if (cacheKey && _contractMappingCache.has(cacheKey)) return _contractMappingCache.get(cacheKey)!
   const raw = (c._raw ?? {}) as Record<string, string>
   const flagsCodigo = c.flags_codigo ?? []
   const riskAnalysis: RiskAnalysis = {
@@ -57,7 +62,7 @@ export function mapBackendContract(c: BackendContract): ContractWithRisk {
     flags: mapFlags(flagsCodigo),
     highlights: [],
   }
-  return {
+  const mapped = {
     ...raw,
     id: c.id_proceso ?? `c-${Math.random().toString(36).slice(2)}`,
     entidad: c.nombre_entidad ?? '',
@@ -112,6 +117,8 @@ export function mapBackendContract(c: BackendContract): ContractWithRisk {
     urlproceso: c.url_proceso ?? '',
     riskAnalysis,
   } as unknown as ContractWithRisk
+  if (cacheKey) _contractMappingCache.set(cacheKey, mapped)
+  return mapped
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,8 +267,9 @@ export function useEntitiesInfinite() {
           if (cancelled) break
           const mapped = entidades.map((e) => ({ name: e.nombre, nit: e.nit, count: e.total_contratos_muestra }))
           accValor += entidades.reduce((s, e) => s + (e.total_valor ?? 0), 0)
-          allEntities = [...allEntities, ...mapped]
-          setEntities([...allEntities].sort((a, b) => b.count - a.count))
+          allEntities = allEntities.concat(mapped)
+          // Sort only the newly accumulated array — avoid spread on every iteration
+          setEntities(allEntities.slice().sort((a, b) => b.count - a.count))
           setTotalValor(accValor)
           setOffset(currentOffset + ENTITY_PAGE_SIZE)
           currentOffset += ENTITY_PAGE_SIZE
@@ -330,43 +338,57 @@ export function useEntities() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useDashboardStats(contracts: ContractWithRisk[]): DashboardStats {
-  if (contracts.length === 0) {
+  return useMemo(() => {
+    if (contracts.length === 0) {
+      return {
+        totalContracts: 0, totalValue: 0, avgRiskScore: 0, highRiskCount: 0, entitiesCount: 0,
+        topEntities: [],
+        riskDistribution: [
+          { level: 'bajo', count: 0 }, { level: 'medio', count: 0 },
+          { level: 'alto', count: 0 }, { level: 'critico', count: 0 },
+        ],
+        contractsByMonth: [],
+      }
+    }
+
+    // Single-pass computation — avoids iterating contracts 6 times
+    let totalValue = 0
+    let totalScore = 0
+    let highRiskCount = 0
+    let bajoCnt = 0, medioCnt = 0, altoCnt = 0, criticoCnt = 0
+    const entityMap = new Map<string, { name: string; count: number; totalRisk: number }>()
+
+    for (const c of contracts) {
+      totalValue += parseContractValue(c.cuantia_contrato)
+      totalScore += c.riskAnalysis.score
+      const lvl = c.riskAnalysis.level
+      if (lvl === 'alto' || lvl === 'critico') highRiskCount++
+      if (lvl === 'bajo') bajoCnt++
+      else if (lvl === 'medio') medioCnt++
+      else if (lvl === 'alto') altoCnt++
+      else criticoCnt++
+      const existing = entityMap.get(c.nit_entidad)
+      if (existing) { existing.count++; existing.totalRisk += c.riskAnalysis.score }
+      else entityMap.set(c.nit_entidad, { name: c.nombre_entidad, count: 1, totalRisk: c.riskAnalysis.score })
+    }
+
     return {
-      totalContracts: 0, totalValue: 0, avgRiskScore: 0, highRiskCount: 0, entitiesCount: 0,
-      topEntities: [],
+      totalContracts: contracts.length,
+      totalValue,
+      avgRiskScore: totalScore / contracts.length,
+      highRiskCount,
+      entitiesCount: entityMap.size,
+      topEntities: Array.from(entityMap.values())
+        .map((e) => ({ name: e.name, count: e.count, avgRisk: e.totalRisk / e.count }))
+        .sort((a, b) => b.count - a.count).slice(0, 5),
       riskDistribution: [
-        { level: 'bajo', count: 0 }, { level: 'medio', count: 0 },
-        { level: 'alto', count: 0 }, { level: 'critico', count: 0 },
+        { level: 'bajo' as const, count: bajoCnt },
+        { level: 'medio' as const, count: medioCnt },
+        { level: 'alto' as const, count: altoCnt },
+        { level: 'critico' as const, count: criticoCnt },
       ],
       contractsByMonth: [],
     }
-  }
-
-  const totalValue = contracts.reduce((sum, c) => sum + parseContractValue(c.cuantia_contrato), 0)
-  const avgRiskScore = contracts.reduce((sum, c) => sum + c.riskAnalysis.score, 0) / contracts.length
-  const highRiskCount = contracts.filter(
-    (c) => c.riskAnalysis.level === 'alto' || c.riskAnalysis.level === 'critico',
-  ).length
-
-  const entityMap = new Map<string, { name: string; count: number; totalRisk: number }>()
-  for (const c of contracts) {
-    const existing = entityMap.get(c.nit_entidad)
-    if (existing) { existing.count++; existing.totalRisk += c.riskAnalysis.score }
-    else entityMap.set(c.nit_entidad, { name: c.nombre_entidad, count: 1, totalRisk: c.riskAnalysis.score })
-  }
-
-  return {
-    totalContracts: contracts.length, totalValue, avgRiskScore, highRiskCount,
-    entitiesCount: entityMap.size,
-    topEntities: Array.from(entityMap.values())
-      .map((e) => ({ name: e.name, count: e.count, avgRisk: e.totalRisk / e.count }))
-      .sort((a, b) => b.count - a.count).slice(0, 5),
-    riskDistribution: [
-      { level: 'bajo' as const, count: contracts.filter((c) => c.riskAnalysis.level === 'bajo').length },
-      { level: 'medio' as const, count: contracts.filter((c) => c.riskAnalysis.level === 'medio').length },
-      { level: 'alto' as const, count: contracts.filter((c) => c.riskAnalysis.level === 'alto').length },
-      { level: 'critico' as const, count: contracts.filter((c) => c.riskAnalysis.level === 'critico').length },
-    ],
-    contractsByMonth: [],
-  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contracts])
 }
