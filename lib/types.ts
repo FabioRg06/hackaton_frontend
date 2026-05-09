@@ -109,7 +109,7 @@ export interface EntityContext {
 }
 
 // UI State Types
-export type ViewMode = 'dashboard' | 'contract-list' | 'contract-detail' | 'exploratory' | 'comparison' | 'entity-list' | 'count' | 'query-result' | 'secop-full-list' | 'secop-table' | 'secop-chart' | 'high-risk-contract-list' | 'analysis-report'
+export type ViewMode = 'dashboard' | 'contract-list' | 'contract-detail' | 'exploratory' | 'comparison' | 'entity-list' | 'entity-contracts' | 'count' | 'query-result' | 'secop-full-list' | 'secop-table' | 'secop-chart' | 'high-risk-contract-list' | 'analysis-report'
 
 export interface DynamicUIState {
   viewMode: ViewMode

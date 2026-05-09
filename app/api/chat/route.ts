@@ -72,6 +72,7 @@ Cuando el usuario pida cualquier análisis, listado, conteo o visualización de 
 Cuando el usuario pida contratos de mayor riesgo, alto riesgo, mas alertas, o similares Y la base interna esté disponible, USA contratos_alto_riesgo; si no, USA consultar_secop con $order por precio_base DESC.
 Cuando pidan una gráfica o visualización específica, USA la herramienta generar_grafica (primero obtén datos con consultar_secop si es necesario).
 Cuando el usuario pida: análisis general, qué análisis hay disponibles, informe general, diagnóstico, resumen del sistema, estadísticas globales, panorama general — USA la herramienta analizar_sistema. Incluye tus observaciones clave como insights.
+Cuando el usuario pida entidades con más alertas, entidades con más red flags, entidades de mayor riesgo, ranking de entidades por riesgo, o similares — USA la herramienta listar_entidades_alertas.
 Siempre devuelve el resultado con la herramienta; NO inventes datos.`,
       messages: modelMessages,
       maxSteps: 5,
@@ -224,6 +225,52 @@ Usa para: distribución por modalidad, contratos por mes, top entidades por valo
               color: color ?? '#2563eb',
               yLabel,
             }
+          },
+        } as any),
+        listar_entidades_alertas: tool({
+          description: 'Obtener las entidades públicas con más alertas o red flags en sus contratos evaluados. Usar cuando el usuario pida: entidades con más alertas, entidades de mayor riesgo, ranking de entidades por riesgo, cuáles entidades tienen más problemas, o similares.',
+          parameters: z.object({
+            limit: z.number().optional().describe('Número de entidades a retornar (máx 30). Por defecto 20.'),
+          }),
+          execute: async ({ limit = 20 }: { limit?: number }) => {
+            console.log('[chat] Tool: listar_entidades_alertas called, limit:', limit)
+            const qs = new URLSearchParams({ limit: '100', offset: '0', orderBy: 'score' })
+            const res = await fetch(`${BACKEND_URL}/contratos?${qs}`)
+            if (!res.ok) throw new Error(`Backend error ${res.status}`)
+            const data = await res.json()
+
+            // Group by entity, accumulate alert counts
+            const byEntity = new Map<string, {
+              nit: string; name: string; total_contratos: number;
+              total_alertas: number; alertas_criticas: number; alertas_altas: number; max_score: number
+            }>()
+
+            for (const c of data.contratos ?? []) {
+              const nit = c.entidad?.nit ?? 'unknown'
+              const name = c.entidad?.nombre ?? 'Entidad desconocida'
+              const evaluacion = Array.isArray(c.evaluacion) ? c.evaluacion[0] : c.evaluacion
+              const hallazgos: any[] = Array.isArray(c.opacidad_hallazgo) ? c.opacidad_hallazgo : []
+              const score = evaluacion?.score_final ?? 0
+              const criticas = hallazgos.filter((h: any) => h.severidad === 'CRITICA').length
+              const altas = hallazgos.filter((h: any) => h.severidad === 'ALTA').length
+              const existing = byEntity.get(nit)
+              if (existing) {
+                existing.total_contratos++
+                existing.total_alertas += hallazgos.length
+                existing.alertas_criticas += criticas
+                existing.alertas_altas += altas
+                existing.max_score = Math.max(existing.max_score, score)
+              } else {
+                byEntity.set(nit, { nit, name, total_contratos: 1, total_alertas: hallazgos.length, alertas_criticas: criticas, alertas_altas: altas, max_score: score })
+              }
+            }
+
+            const entities = Array.from(byEntity.values())
+              .sort((a, b) => b.total_alertas - a.total_alertas || b.max_score - a.max_score)
+              .slice(0, Math.min(limit, 30))
+              .map(e => ({ name: e.name, nit: e.nit, count: e.total_contratos, total_alertas: e.total_alertas, alertas_criticas: e.alertas_criticas, alertas_altas: e.alertas_altas, max_score: e.max_score }))
+
+            return { type: 'entity-list', entities }
           },
         } as any),
         analizar_sistema: tool({

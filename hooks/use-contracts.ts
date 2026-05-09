@@ -238,9 +238,18 @@ export function useContracts(filters: ContractFilters = {}, limit = PAGE_SIZE) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ENTITY_PAGE_SIZE = 200
+const ENTITY_REFRESH_INTERVAL_MS = 15000
+
+export interface EntitySummary {
+  name: string
+  nit: string
+  count: number
+  totalValor: number
+  departamento: string | null
+}
 
 export function useEntitiesInfinite() {
-  const [entities, setEntities] = useState<{ name: string; nit: string; count: number }[]>([])
+  const [entities, setEntities] = useState<EntitySummary[]>([])
   const [entityContractsByNit, setEntityContractsByNit] = useState<Record<string, ContractWithRisk[]>>({})
   const [totalValor, setTotalValor] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -248,64 +257,89 @@ export function useEntitiesInfinite() {
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  const refreshInFlightRef = useRef(false)
 
-  // Auto-load all entity pages sequentially so the full list is visible on startup.
-  useEffect(() => {
-    let cancelled = false
+  const loadAllEntities = useCallback(async (showSkeleton: boolean) => {
+    if (refreshInFlightRef.current) return
+    refreshInFlightRef.current = true
 
-    async function loadAll() {
+    try {
       let currentOffset = 0
-      let allEntities: { name: string; nit: string; count: number }[] = []
+      let allEntities: EntitySummary[] = []
       let accValor = 0
       let more = true
 
-      setIsLoading(true)
+      if (showSkeleton) {
+        setIsLoading(true)
+      }
+      setError(null)
 
-      while (more && !cancelled) {
-        try {
-          const { entidades, hasMore: morePages } = await fetchEntities(ENTITY_PAGE_SIZE, currentOffset)
-          if (cancelled) break
-          const mapped = entidades.map((e) => ({ name: e.nombre, nit: e.nit, count: e.total_contratos_muestra }))
-          accValor += entidades.reduce((s, e) => s + (e.total_valor ?? 0), 0)
-          allEntities = allEntities.concat(mapped)
-          // Sort only the newly accumulated array — avoid spread on every iteration
+      while (more) {
+        const { entidades, hasMore: morePages } = await fetchEntities(ENTITY_PAGE_SIZE, currentOffset, {
+          fresh: true,
+        })
+        const mapped = entidades.map((e) => ({
+          name: e.nombre,
+          nit: e.nit,
+          count: e.total_contratos_muestra,
+          totalValor: e.total_valor ?? 0,
+          departamento: e.departamento ?? null,
+        }))
+        accValor += entidades.reduce((s, e) => s + (e.total_valor ?? 0), 0)
+        allEntities = allEntities.concat(mapped)
+        currentOffset += ENTITY_PAGE_SIZE
+        more = morePages ?? false
+
+        if (showSkeleton && currentOffset === ENTITY_PAGE_SIZE) {
           setEntities(allEntities.slice().sort((a, b) => b.count - a.count))
           setTotalValor(accValor)
-          setOffset(currentOffset + ENTITY_PAGE_SIZE)
-          currentOffset += ENTITY_PAGE_SIZE
-          more = morePages ?? false
+          setOffset(currentOffset)
           setHasMore(more)
-          if (currentOffset === ENTITY_PAGE_SIZE) {
-            // First page done — stop showing skeleton
-            setIsLoading(false)
-          }
-        } catch (err) {
-          if (!cancelled) {
-            console.error('[api] fetchEntities error:', err)
-            setError(err as Error)
-            setIsLoading(false)
-          }
-          break
+          setIsLoading(false)
         }
       }
 
-      if (!cancelled) {
-        setIsLoading(false)
-        setHasMore(false)
-      }
+      setEntities(allEntities.slice().sort((a, b) => b.count - a.count))
+      setTotalValor(accValor)
+      setOffset(currentOffset)
+      setHasMore(false)
+      setIsLoading(false)
+    } catch (err) {
+      console.error('[api] fetchEntities error:', err)
+      setError(err as Error)
+      setIsLoading(false)
+    } finally {
+      refreshInFlightRef.current = false
+    }
+  }, [])
+
+  // Auto-load all entity pages sequentially and keep them fresh while the page is open.
+  useEffect(() => {
+    let active = true
+
+    const syncEntities = async (showSkeleton: boolean) => {
+      await loadAllEntities(showSkeleton)
+      if (!active) return
     }
 
-    loadAll()
-    return () => { cancelled = true }
-  }, [])
+    void syncEntities(true)
+    const intervalId = window.setInterval(() => {
+      void syncEntities(false)
+    }, ENTITY_REFRESH_INTERVAL_MS)
+
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+    }
+  }, [loadAllEntities])
 
   const loadMore = useCallback(async () => {
     // loadMore is kept for compatibility but auto-loading handles pagination now.
     if (isLoadingMore || !hasMore) return
     setIsLoadingMore(true)
     try {
-      const { entidades, hasMore: more } = await fetchEntities(ENTITY_PAGE_SIZE, offset)
-      const newEntities = entidades.map((e) => ({ name: e.nombre, nit: e.nit, count: e.total_contratos_muestra }))
+      const { entidades, hasMore: more } = await fetchEntities(ENTITY_PAGE_SIZE, offset, { fresh: true })
+      const newEntities = entidades.map((e) => ({ name: e.nombre, nit: e.nit, count: e.total_contratos_muestra, totalValor: e.total_valor ?? 0, departamento: e.departamento ?? null }))
       setEntities((prev) => {
         const existingNits = new Set(prev.map((e) => e.nit))
         const unique = newEntities.filter((e) => !existingNits.has(e.nit))

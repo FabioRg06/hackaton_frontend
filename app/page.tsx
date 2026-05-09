@@ -12,6 +12,7 @@ import { ChatInterface } from '@/components/chat/chat-interface'
 import { DynamicUIRenderer } from '@/components/chat/dynamic-ui-renderer'
 import { useContractsInfinite, useEntitiesInfinite, useDashboardStats } from '@/hooks/use-contracts'
 import { ExploratoryDashboard } from '@/components/charts/exploratory-dashboard'
+import { AllEntitiesDashboard } from '@/components/charts/all-entities-dashboard'
 import type { ContractWithRisk, ViewMode } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { formatCurrency } from '@/lib/secop'
@@ -122,6 +123,57 @@ export default function HomePage() {
     setSelectedContract(null)
   }, [])
 
+  const handleEntityClick = useCallback(async (nit: string, name: string) => {
+    setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: null, loading: true } })
+    try {
+      const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001/api').replace(/\/$/, '')
+      // Try evaluated contracts from backend first
+      const qs = new URLSearchParams({ limit: '50', offset: '0', orderBy: 'score' })
+      const res = await fetch(`${backendUrl}/contratos?${qs}`)
+      if (res.ok) {
+        const body = await res.json()
+        const contratos = (body.contratos ?? []).filter((c: any) => {
+          const entityNit = c.entidad?.nit ?? ''
+          return entityNit === nit
+        })
+        if (contratos.length > 0) {
+          const mapped = contratos.map((c: any) => {
+            const evaluacion = Array.isArray(c.evaluacion) ? c.evaluacion[0] : c.evaluacion
+            const hallazgos: any[] = Array.isArray(c.opacidad_hallazgo) ? c.opacidad_hallazgo : []
+            return {
+              id: c.id,
+              objeto: c.objeto,
+              valor_inicial: c.valor_inicial,
+              fecha_firma: c.fecha_firma,
+              modalidad: c.modalidad_contratacion,
+              nivel_riesgo: evaluacion?.nivel_riesgo ?? '',
+              score: evaluacion?.score_final ?? 0,
+              total_alertas: hallazgos.length,
+              alertas_criticas: hallazgos.filter((h: any) => h.severidad === 'CRITICA').length,
+              alertas_altas: hallazgos.filter((h: any) => h.severidad === 'ALTA').length,
+              url_proceso: c.url_proceso,
+            }
+          })
+          setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: mapped } })
+          return
+        }
+      }
+      // Fallback: SECOP raw contracts for this entity
+      const secopRes = await fetch(`${backendUrl}/entidades/${encodeURIComponent(nit)}/contratos?limit=50`)
+      if (!secopRes.ok) throw new Error(`Error ${secopRes.status}`)
+      const secopBody = await secopRes.json()
+      const secopContratos = (secopBody.contratos ?? []).map((c: any, i: number) => ({
+        id: c.id_del_proceso ?? c.referencia_del_proceso ?? `c-${i}`,
+        objeto: c.descripci_n_del_procedimiento ?? c.nombre_del_procedimiento,
+        modalidad: c.modalidad_de_contratacion,
+        url_proceso: typeof c.urlproceso === 'object' ? c.urlproceso?.url : c.urlproceso,
+      }))
+      setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: secopContratos } })
+    } catch {
+      setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: [], error: true } })
+    }
+  }, [])
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
       {/* Header */}
@@ -230,6 +282,7 @@ export default function HomePage() {
                   data={dynamicView.data}
                   onBack={handleBackToDashboard}
                   onContractClick={handleContractClick}
+                  onEntityClick={handleEntityClick}
                 />
               </motion.div>
             ) : selectedEntity === null ? (
@@ -333,6 +386,12 @@ export default function HomePage() {
                     </div>
                   </motion.div>
                 </div>
+
+                {/* ── Analytics dashboard ──────────────────────────── */}
+                <AllEntitiesDashboard
+                  entities={entities}
+                  isLoading={backendEntitiesLoading}
+                />
 
                 {/* ── Entity cards ──────────────────────────────────── */}
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

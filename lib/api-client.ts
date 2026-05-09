@@ -7,29 +7,25 @@
 const BACKEND_URL =
   (process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001/api').replace(/\/$/, '')
 
-// ─────────────────────────────────────────────────────────────────────────────
-// In-memory GET cache — avoids redundant network calls for read-only endpoints
-// ─────────────────────────────────────────────────────────────────────────────
-
-const _cache = new Map<string, { data: unknown; expiresAt: number }>()
-const CACHE_TTL = 5 * 60 * 1000 // 5 min
-
-async function cachedFetch<T>(url: string): Promise<T> {
-  const now = Date.now()
-  const hit = _cache.get(url)
-  if (hit && hit.expiresAt > now) return hit.data as T
-  const res = await fetch(url)
+async function liveFetch<T>(url: string): Promise<T> {
+  const res = await fetch(url, {
+    cache: 'no-store',
+    headers: {
+      'Cache-Control': 'no-cache, no-store, max-age=0',
+      Pragma: 'no-cache',
+    },
+  })
   if (!res.ok) throw new Error(`Backend error ${res.status}: ${url}`)
-  const data: T = await res.json()
-  _cache.set(url, { data, expiresAt: now + CACHE_TTL })
-  return data
+  return res.json()
 }
 
-/** Invalidate all cached entries whose URL starts with the given prefix. */
+/**
+ * Preserved for compatibility with existing callers.
+ * The frontend no longer caches API reads because entities/contracts must be
+ * re-fetched from the datos.gov.co-backed backend on every request.
+ */
 export function invalidateCache(prefix: string) {
-  for (const key of _cache.keys()) {
-    if (key.startsWith(prefix)) _cache.delete(key)
-  }
+  void prefix
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,14 +203,16 @@ export async function fetchContracts(params: {
     ? `${BACKEND_URL}/entidades/${encodeURIComponent(nit)}/contratos?${qs}`
     : `${BACKEND_URL}/entidades/contratos?${qs}`
 
-  return cachedFetch<{ contratos: BackendContract[]; total: number; hasMore: boolean }>(url)
+  return liveFetch<{ contratos: BackendContract[]; total: number; hasMore: boolean }>(url)
 }
 
 export async function fetchEntities(
   limit = 50,
   offset = 0,
+  options?: { fresh?: boolean },
 ): Promise<{ entidades: BackendEntity[]; total: number; hasMore: boolean }> {
-  return cachedFetch(`${BACKEND_URL}/entidades?limit=${limit}&offset=${offset}`)
+  void options
+  return liveFetch(`${BACKEND_URL}/entidades?limit=${limit}&offset=${offset}`)
 }
 
 /**

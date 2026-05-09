@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ArrowLeft, BarChart3, AlertTriangle, FileText, Building2, Database, TrendingUp, ShieldAlert, Activity, Layers, Info } from 'lucide-react'
+import { ArrowLeft, BarChart3, AlertTriangle, FileText, Building2, Database, TrendingUp, ShieldAlert, Activity, Layers, Info, ChevronRight, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -13,11 +13,23 @@ import { SecopChart } from '@/components/charts/secop-chart'
 import type { ViewMode, ContractWithRisk } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
+function normalizeChartRows(raw: unknown): Record<string, unknown>[] {
+  if (Array.isArray(raw)) return raw.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+  if (raw && typeof raw === 'object') {
+    const value = (raw as { data?: unknown }).data
+    if (Array.isArray(value)) {
+      return value.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    }
+  }
+  return []
+}
+
 interface DynamicUIRendererProps {
   viewMode: ViewMode
   data: unknown
   onBack: () => void
   onContractClick: (contract: ContractWithRisk) => void
+  onEntityClick?: (nit: string, name: string) => void
 }
 
 export function DynamicUIRenderer({
@@ -25,6 +37,7 @@ export function DynamicUIRenderer({
   data,
   onBack,
   onContractClick,
+  onEntityClick,
 }: DynamicUIRendererProps) {
   const renderHeader = (title: string, icon: React.ReactNode) => (
     <div className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-4 py-3 backdrop-blur">
@@ -106,30 +119,209 @@ export function DynamicUIRenderer({
     }
 
     case 'entity-list': {
-      const entities = data as { name: string; nit: string; count: number }[]
+      const entities = data as { name: string; nit: string; count: number; total_alertas?: number; alertas_criticas?: number; alertas_altas?: number; max_score?: number }[]
+      const hasAlerts = entities.some(e => (e.total_alertas ?? 0) > 0)
       return (
         <div className="flex h-full flex-col">
           {renderHeader(
-            'Entidades Públicas',
+            hasAlerts ? 'Entidades con Más Alertas' : 'Entidades Públicas',
             <Building2 className="h-5 w-5 text-primary" />
           )}
           <ScrollArea className="flex-1 p-4">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {entities.map((entity) => (
-                <Card key={entity.nit} className="overflow-hidden">
-                  <CardHeader className="bg-muted/50 pb-2">
-                    <CardTitle className="text-sm font-bold truncate">{entity.name}</CardTitle>
-                    <p className="text-xs text-muted-foreground">NIT: {entity.nit}</p>
-                  </CardHeader>
-                  <CardContent className="pt-4">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">Contratos:</span>
-                      <span className="font-semibold">{entity.count}</span>
-                    </div>
-                  </CardContent>
-                </Card>
+                <motion.div
+                  key={entity.nit}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <Card
+                    className={cn(
+                      'overflow-hidden transition-shadow',
+                      onEntityClick && 'cursor-pointer hover:shadow-md hover:border-primary/40'
+                    )}
+                    onClick={() => onEntityClick?.(entity.nit, entity.name)}
+                  >
+                    <CardHeader className="bg-muted/50 pb-2">
+                      <CardTitle className="text-sm font-bold truncate">{entity.name}</CardTitle>
+                      <p className="text-xs text-muted-foreground">NIT: {entity.nit}</p>
+                    </CardHeader>
+                    <CardContent className="pt-4 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-muted-foreground">Contratos:</span>
+                        <span className="font-semibold">{entity.count}</span>
+                      </div>
+                      {(entity.total_alertas ?? 0) > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {(entity.alertas_criticas ?? 0) > 0 && (
+                            <span className="inline-flex items-center rounded-full bg-red-500/10 border border-red-200 dark:border-red-800 px-2 py-0.5 text-xs font-semibold text-red-600">
+                              {entity.alertas_criticas} críticas
+                            </span>
+                          )}
+                          {(entity.alertas_altas ?? 0) > 0 && (
+                            <span className="inline-flex items-center rounded-full bg-orange-500/10 border border-orange-200 dark:border-orange-800 px-2 py-0.5 text-xs font-semibold text-orange-600">
+                              {entity.alertas_altas} altas
+                            </span>
+                          )}
+                          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                            {entity.total_alertas} alertas
+                          </span>
+                        </div>
+                      )}
+                      {onEntityClick && (
+                        <div className="flex items-center gap-1 pt-1 text-xs text-primary font-medium">
+                          <ChevronRight className="h-3 w-3" />
+                          Ver contratos
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </motion.div>
               ))}
             </div>
+          </ScrollArea>
+        </div>
+      )
+    }
+
+    case 'entity-contracts': {
+      const { name, nit, contratos, loading, error } = data as {
+        name: string
+        nit: string
+        contratos: Array<{
+          id: string; secop_id?: string; objeto?: string; valor_inicial?: number
+          fecha_firma?: string; modalidad?: string; nivel_riesgo?: string; score?: number
+          total_alertas?: number; alertas_criticas?: number; alertas_altas?: number; url_proceso?: string
+          // SECOP raw fields
+          descripci_n_del_procedimiento?: string; modalidad_de_contratacion?: string
+          valor_total_adjudicacion?: string; fecha_de_publicacion_del?: string
+          riskAnalysis?: { score: number; level: string; flags: any[] }
+        }> | null
+        loading?: boolean
+        error?: boolean
+      }
+
+      const riskColor: Record<string, string> = {
+        CRITICO: 'bg-red-500/10 text-red-600 border-red-200 dark:border-red-800',
+        ALTO: 'bg-orange-500/10 text-orange-600 border-orange-200 dark:border-orange-800',
+        MEDIO: 'bg-yellow-500/10 text-yellow-600 border-yellow-200 dark:border-yellow-800',
+        BAJO: 'bg-green-500/10 text-green-600 border-green-200 dark:border-green-800',
+      }
+
+      return (
+        <div className="flex h-full flex-col">
+          <div className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/95 px-6 py-4 backdrop-blur">
+            <Button variant="ghost" size="icon" onClick={onBack} className="rounded-full">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <Building2 className="h-4 w-4 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold leading-tight truncate">{name}</h2>
+                <p className="text-xs text-muted-foreground">NIT: {nit} · Contratos con alertas</p>
+              </div>
+            </div>
+          </div>
+          <ScrollArea className="flex-1">
+            {loading && (
+              <div className="flex h-48 items-center justify-center gap-2 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span className="text-sm">Cargando contratos...</span>
+              </div>
+            )}
+            {error && !loading && (
+              <div className="flex h-48 flex-col items-center justify-center gap-2 text-muted-foreground">
+                <AlertTriangle className="h-8 w-8 text-destructive/60" />
+                <span className="text-sm">No se pudieron cargar los contratos.</span>
+              </div>
+            )}
+            {!loading && !error && contratos && contratos.length === 0 && (
+              <div className="flex h-48 flex-col items-center justify-center gap-2 text-muted-foreground">
+                <FileText className="h-8 w-8 opacity-40" />
+                <span className="text-sm">No se encontraron contratos evaluados para esta entidad.</span>
+              </div>
+            )}
+            {!loading && contratos && contratos.length > 0 && (
+              <div className="p-6 space-y-3">
+                {contratos.map((c, i) => {
+                  const objeto = c.objeto ?? c.descripci_n_del_procedimiento ?? `Contrato ${i + 1}`
+                  const modalidad = c.modalidad ?? c.modalidad_de_contratacion ?? ''
+                  const nivelRiesgo = c.nivel_riesgo ?? (c.riskAnalysis ? c.riskAnalysis.level.toUpperCase() : '')
+                  const score = c.score ?? c.riskAnalysis?.score ?? 0
+                  const totalAlertas = c.total_alertas ?? c.riskAnalysis?.flags.length ?? 0
+                  const criticas = c.alertas_criticas ?? c.riskAnalysis?.flags.filter((f: any) => f.severity === 'critical' || f.severidad === 'CRITICA').length ?? 0
+                  const altas = c.alertas_altas ?? c.riskAnalysis?.flags.filter((f: any) => f.severity === 'danger' || f.severidad === 'ALTA').length ?? 0
+
+                  return (
+                    <motion.div
+                      key={c.id || i}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.03, duration: 0.25 }}
+                    >
+                      <div className="rounded-xl border bg-card p-4 hover:shadow-sm transition-shadow">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                              {nivelRiesgo && (
+                                <span className={cn(
+                                  'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold',
+                                  riskColor[nivelRiesgo] ?? 'bg-muted text-muted-foreground'
+                                )}>
+                                  {nivelRiesgo}
+                                </span>
+                              )}
+                              {modalidad && (
+                                <span className="text-xs text-muted-foreground truncate max-w-[180px]">{modalidad}</span>
+                              )}
+                            </div>
+                            <p className="text-sm font-medium line-clamp-2 leading-snug">{objeto}</p>
+                          </div>
+                          {score > 0 && (
+                            <div className="shrink-0 text-right">
+                              <div className="text-2xl font-bold tabular-nums text-primary">{score}</div>
+                              <div className="text-xs text-muted-foreground">score</div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="mt-3 space-y-1.5">
+                          {score > 0 && (
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className={cn(
+                                  'h-full rounded-full transition-all',
+                                  score >= 75 ? 'bg-red-500' : score >= 50 ? 'bg-orange-500' : 'bg-yellow-500'
+                                )}
+                                style={{ width: `${Math.min(score, 100)}%` }}
+                              />
+                            </div>
+                          )}
+                          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                            {criticas > 0 && <span className="text-red-500 font-medium">{criticas} críticas</span>}
+                            {altas > 0 && <span className="text-orange-500 font-medium">{altas} altas</span>}
+                            {totalAlertas > 0 && <span>{totalAlertas} alertas</span>}
+                            {c.url_proceso && (
+                              <a
+                                href={typeof c.url_proceso === 'string' ? c.url_proceso : '#'}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="ml-auto text-primary underline-offset-2 hover:underline"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                Ver en SECOP
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  )
+                })}
+              </div>
+            )}
           </ScrollArea>
         </div>
       )
@@ -309,7 +501,7 @@ export function DynamicUIRenderer({
         yLabel?: string
       }
 
-      const chartData: Record<string, any>[] = Array.isArray(rawChartData) ? rawChartData : []
+      const chartData = normalizeChartRows(rawChartData)
       const total = chartData.reduce((s: number, r: any) => s + (Number(r[yKey]) || 0), 0)
       const maxVal = chartData.length > 0 ? Math.max(...chartData.map((r: any) => Number(r[yKey]) || 0)) : 0
 
@@ -331,6 +523,11 @@ export function DynamicUIRenderer({
           </div>
           <ScrollArea className="flex-1">
             <div className="p-6 space-y-6">
+              {chartData.length === 0 && (
+                <div className="rounded-xl border border-dashed bg-card/60 p-6 text-sm text-muted-foreground">
+                  No se pudo construir la gráfica con la respuesta recibida. Vuelve a ejecutar la consulta para traer datos tabulares desde SECOP II.
+                </div>
+              )}
               {/* Summary stat strip */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="rounded-xl border bg-card p-4">
@@ -347,17 +544,19 @@ export function DynamicUIRenderer({
                 </div>
               </div>
               {/* Chart card */}
-              <div className="rounded-2xl border bg-card p-6 shadow-sm">
-                <SecopChart
-                  chartType={chartType}
-                  title=""
-                  data={chartData}
-                  xKey={xKey}
-                  yKey={yKey}
-                  color={color}
-                  yLabel={yLabel}
-                />
-              </div>
+              {chartData.length > 0 && (
+                <div className="rounded-2xl border bg-card p-6 shadow-sm">
+                  <SecopChart
+                    chartType={chartType}
+                    title=""
+                    data={chartData}
+                    xKey={xKey}
+                    yKey={yKey}
+                    color={color}
+                    yLabel={yLabel}
+                  />
+                </div>
+              )}
             </div>
           </ScrollArea>
         </div>
