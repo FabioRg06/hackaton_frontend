@@ -207,9 +207,9 @@ export function calculateRiskScore(
 
   // Determine level
   const level: RiskLevel = 
-    score < 20 ? 'bajo' : 
-    score < 45 ? 'medio' : 
-    score < 70 ? 'alto' : 'critico'
+    score < 31 ? 'bajo' : 
+    score < 61 ? 'medio' : 
+    score < 91 ? 'alto' : 'critico'
 
   return {
     score,

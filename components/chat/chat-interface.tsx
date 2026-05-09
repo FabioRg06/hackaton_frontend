@@ -7,7 +7,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { MessageSquare, X, Send, Sparkles, Loader2, Minimize2, Maximize2, AlertCircle, Search } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { ChatMessage } from './chat-message'
 import { cn } from '@/lib/utils'
 import type { ContractWithRisk, ViewMode } from '@/lib/types'
@@ -36,15 +35,16 @@ function getToolMessage(part: {
   state?: string
   toolName?: string
 }): string {
-  if (part.state !== 'output-available' || !part.output) return ''
-  if (!part.type?.startsWith('tool-')) return ''
+  // AI SDK v6: tool parts have type 'tool-<name>' and state 'output-available'
+  const hasOutput = (part.state === 'output-available' || (part as any).state === 'output-available') && part.output
+  if (!hasOutput) return ''
 
-  if (part.output.type === 'count' && typeof part.output.total === 'number') {
-    return `Hay ${new Intl.NumberFormat('es-CO').format(part.output.total)} contratos en total.`
+  if (part.output!.type === 'count' && typeof part.output!.total === 'number') {
+    return `Hay ${new Intl.NumberFormat('es-CO').format(part.output!.total as number)} contratos en total.`
   }
 
-  if (part.output.type === 'contract-list' && typeof part.output.count === 'number') {
-    return `Encontré ${new Intl.NumberFormat('es-CO').format(part.output.count)} contratos para tu consulta.`
+  if (part.output!.type === 'contract-list' && typeof part.output!.count === 'number') {
+    return `Encontré ${new Intl.NumberFormat('es-CO').format(part.output!.count as number)} contratos para tu consulta.`
   }
 
   return ''
@@ -129,6 +129,10 @@ export function ChatInterface({
       onDynamicUIChange('high-risk-contract-list', { contratos: result.contratos, total: result.total })
     } else if (uiType === 'analysis-report') {
       onDynamicUIChange('analysis-report', result)
+    } else if (uiType === 'schema-info') {
+      onDynamicUIChange('schema-info', result)
+    } else if (uiType === 'field-values') {
+      onDynamicUIChange('field-values', result)
     }
   }
 
@@ -168,19 +172,23 @@ export function ChatInterface({
   }, [isOpen])
 
   // Process tool results from messages to update UI
+  // AI SDK v6: tool parts have type 'tool-<toolName>' (not 'tool-output-available')
+  // and carry the result under .output when .state === 'output-available'
   useEffect(() => {
     for (const message of messages) {
       if (message.role === 'assistant' && message.parts) {
-        for (const part of message.parts) {
-          if (part.type.startsWith('tool-') && part.state === 'output-available') {
-            const toolCallId = 'toolCallId' in part && typeof part.toolCallId === 'string'
-              ? part.toolCallId
-              : undefined
-            if (toolCallId && processedToolCallIdsRef.current.has(toolCallId)) continue
-            if (toolCallId) processedToolCallIdsRef.current.add(toolCallId)
+        for (const part of message.parts as any[]) {
+          const isToolResult =
+            typeof part.type === 'string' &&
+            part.type.startsWith('tool-') &&
+            part.state === 'output-available'
+          if (!isToolResult) continue
 
-            handleToolResult(part.output as Record<string, unknown> | undefined)
-          }
+          const toolCallId = typeof part.toolCallId === 'string' ? part.toolCallId : undefined
+          if (toolCallId && processedToolCallIdsRef.current.has(toolCallId)) continue
+          if (toolCallId) processedToolCallIdsRef.current.add(toolCallId)
+
+          handleToolResult(part.output as Record<string, unknown> | undefined)
         }
       }
     }
@@ -249,7 +257,7 @@ export function ChatInterface({
             exit={{ opacity: 0, y: 100, scale: 0.9, filter: 'blur(10px)' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
             className={cn(
-              'fixed z-50 flex flex-col overflow-hidden rounded-[2rem] border bg-background/80 backdrop-blur-xl shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)]',
+              'fixed z-50 flex min-h-0 flex-col overflow-hidden rounded-[2rem] border bg-background/80 backdrop-blur-xl shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)]',
               expanded
                 ? 'bottom-6 left-6 right-6 top-24 lg:left-auto lg:right-6 lg:w-[600px]'
                 : 'bottom-6 right-6 h-[600px] w-[400px]'
@@ -294,7 +302,7 @@ export function ChatInterface({
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 px-6 py-4" ref={scrollRef}>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4" ref={scrollRef}>
               {messages.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center text-center py-12">
                   <div className="relative mb-6">
@@ -349,7 +357,7 @@ export function ChatInterface({
                   )}
                 </div>
               )}
-            </ScrollArea>
+            </div>
 
             {/* Input - Floating Style */}
             <div className="p-6 pt-2">

@@ -806,6 +806,96 @@ export function DynamicUIRenderer({
       )
     }
 
+    case 'schema-info': {
+      const schema = data as {
+        total_campos: number
+        campos: Array<{ campo: string; tipo: string; ejemplo: string }>
+        nota: string
+      }
+      return (
+        <div className="flex h-full flex-col">
+          {renderHeader(
+            `Estructura del dataset SECOP II (${schema.total_campos} campos)`,
+            <Database className="h-5 w-5 text-primary" />
+          )}
+          <ScrollArea className="flex-1 p-4">
+            <p className="mb-3 text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2">{schema.nota}</p>
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Campo</th>
+                    <th className="px-3 py-2 text-left font-semibold text-muted-foreground w-20">Tipo</th>
+                    <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Ejemplo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schema.campos.map((c, i) => (
+                    <motion.tr
+                      key={c.campo}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: i * 0.01 }}
+                      className="border-b last:border-0 hover:bg-muted/30"
+                    >
+                      <td className="px-3 py-2 font-mono text-xs font-semibold text-primary">{c.campo}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{c.tipo}</td>
+                      <td className="px-3 py-2 text-xs text-foreground/70 truncate max-w-xs">{c.ejemplo}</td>
+                    </motion.tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ScrollArea>
+        </div>
+      )
+    }
+
+    case 'field-values': {
+      const fv = data as {
+        campo: string
+        valores: Array<{ valor: string; total: number }>
+        nota: string
+      }
+      const maxTotal = Math.max(...fv.valores.map((v) => v.total), 1)
+      return (
+        <div className="flex h-full flex-col">
+          {renderHeader(
+            `Valores de "${fv.campo}"`,
+            <TrendingUp className="h-5 w-5 text-primary" />
+          )}
+          <ScrollArea className="flex-1 p-4">
+            <p className="mb-3 text-xs text-muted-foreground bg-muted rounded-lg px-3 py-2">{fv.nota}</p>
+            <div className="space-y-1.5">
+              {fv.valores.map((v, i) => (
+                <motion.div
+                  key={v.valor}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: i * 0.02 }}
+                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2"
+                >
+                  <span className="w-5 text-xs font-bold text-muted-foreground tabular-nums">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold truncate">{v.valor}</p>
+                    <div className="mt-1 flex items-center gap-2">
+                      <div
+                        className="h-1.5 rounded-full bg-primary/70"
+                        style={{ width: `${Math.round((v.total / maxTotal) * 100)}%`, minWidth: 4 }}
+                      />
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {new Intl.NumberFormat('es-CO').format(v.total)} contratos
+                      </span>
+                    </div>
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          </ScrollArea>
+        </div>
+      )
+    }
+
     default:
       return (
         <div className="flex h-full items-center justify-center p-8 text-center text-muted-foreground">

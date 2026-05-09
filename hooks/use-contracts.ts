@@ -192,7 +192,7 @@ export function useContractsInfinite(
   }, [filterKey, pageSize, filters.entidad, filters.search, filters.riskLevel, initialOffset])
 
   const loadMore = useCallback(async () => {
-    if (isLoadingMore || !hasMore) return
+    if (isLoading || isLoadingMore || !hasMore) return
     setIsLoadingMore(true)
     try {
       const result = await fetchContracts({
@@ -217,7 +217,7 @@ export function useContractsInfinite(
       setIsLoadingMore(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoadingMore, hasMore, filters.entidad, filters.search, filters.riskLevel, pageSize, offset])
+  }, [isLoading, isLoadingMore, hasMore, filters.entidad, filters.search, filters.riskLevel, pageSize, offset])
 
   return { contracts, isLoading, isLoadingMore, hasMore, loadMore, error }
 }

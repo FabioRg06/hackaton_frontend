@@ -12,6 +12,7 @@ import { ChatInterface } from '@/components/chat/chat-interface'
 import { DynamicUIRenderer } from '@/components/chat/dynamic-ui-renderer'
 import { useContractsInfinite, useEntitiesInfinite, useDashboardStats } from '@/hooks/use-contracts'
 import { ExploratoryDashboard } from '@/components/charts/exploratory-dashboard'
+import { AllEntitiesCharts } from '@/components/charts/all-entities-charts'
 import { AllEntitiesDashboard } from '@/components/charts/all-entities-dashboard'
 import type { ContractWithRisk, ViewMode } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -62,6 +63,8 @@ export default function HomePage() {
   hasMoreRef.current = contractsHasMore
   isLoadingMoreRef.current = contractsLoadingMore
   loadMoreRef.current = loadMoreContracts
+  const isLoadingRef = useRef(contractsLoading)
+  isLoadingRef.current = contractsLoading
 
   const entities = backendEntities
 
@@ -80,13 +83,30 @@ export default function HomePage() {
 
   const stats = useDashboardStats(contracts)
 
+  // After initial load completes, re-check whether the sentinel is still visible
+  // and trigger loadMore if so (guards against the case where isLoading blocked the
+  // first observer firing and the sentinel never scrolled out of view).
+  useEffect(() => {
+    if (!contractsLoading && contractsHasMore && !contractsLoadingMore) {
+      const el = sentinelRef.current
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        const windowHeight = window.innerHeight || document.documentElement.clientHeight
+        if (rect.top <= windowHeight + 400) {
+          loadMoreRef.current()
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contractsLoading])
+
   // Stable IntersectionObserver — never re-created on state changes, reads from refs
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMoreRef.current && !isLoadingMoreRef.current) {
+        if (entries[0].isIntersecting && hasMoreRef.current && !isLoadingMoreRef.current && !isLoadingRef.current) {
           loadMoreRef.current()
         }
       },
@@ -127,46 +147,39 @@ export default function HomePage() {
     setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: null, loading: true } })
     try {
       const backendUrl = (process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:3001/api').replace(/\/$/, '')
-      // Try evaluated contracts from backend first
-      const qs = new URLSearchParams({ limit: '50', offset: '0', orderBy: 'score' })
-      const res = await fetch(`${backendUrl}/contratos?${qs}`)
-      if (res.ok) {
-        const body = await res.json()
-        const contratos = (body.contratos ?? []).filter((c: any) => {
-          const entityNit = c.entidad?.nit ?? ''
-          return entityNit === nit
-        })
-        if (contratos.length > 0) {
-          const mapped = contratos.map((c: any) => {
-            const evaluacion = Array.isArray(c.evaluacion) ? c.evaluacion[0] : c.evaluacion
-            const hallazgos: any[] = Array.isArray(c.opacidad_hallazgo) ? c.opacidad_hallazgo : []
-            return {
-              id: c.id,
-              objeto: c.objeto,
-              valor_inicial: c.valor_inicial,
-              fecha_firma: c.fecha_firma,
-              modalidad: c.modalidad_contratacion,
-              nivel_riesgo: evaluacion?.nivel_riesgo ?? '',
-              score: evaluacion?.score_final ?? 0,
-              total_alertas: hallazgos.length,
-              alertas_criticas: hallazgos.filter((h: any) => h.severidad === 'CRITICA').length,
-              alertas_altas: hallazgos.filter((h: any) => h.severidad === 'ALTA').length,
-              url_proceso: c.url_proceso,
-            }
-          })
-          setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: mapped } })
-          return
-        }
-      }
-      // Fallback: SECOP raw contracts for this entity
+      // Always read contracts from the datos.gov.co-backed entity endpoint.
       const secopRes = await fetch(`${backendUrl}/entidades/${encodeURIComponent(nit)}/contratos?limit=50`)
       if (!secopRes.ok) throw new Error(`Error ${secopRes.status}`)
       const secopBody = await secopRes.json()
       const secopContratos = (secopBody.contratos ?? []).map((c: any, i: number) => ({
-        id: c.id_del_proceso ?? c.referencia_del_proceso ?? `c-${i}`,
-        objeto: c.descripci_n_del_procedimiento ?? c.nombre_del_procedimiento,
-        modalidad: c.modalidad_de_contratacion,
-        url_proceso: typeof c.urlproceso === 'object' ? c.urlproceso?.url : c.urlproceso,
+        id: c.id_proceso ?? `c-${i}`,
+        objeto: c.descripcion_procedimiento ?? c.nombre_procedimiento,
+        valor_inicial: c.precio_base ?? c.valor_contrato ?? 0,
+        fecha_firma: c.fecha_firma ?? c.fecha_publicacion,
+        modalidad: c.modalidad_contratacion,
+        nivel_riesgo: c.flags_codigo?.some((flag: any) => flag.severidad === 'CRITICA')
+          ? 'critico'
+          : c.flags_codigo?.some((flag: any) => flag.severidad === 'ALTA')
+            ? 'alto'
+            : c.flags_codigo?.some((flag: any) => flag.severidad === 'MEDIA')
+              ? 'medio'
+              : 'bajo',
+        score: Array.isArray(c.flags_codigo)
+          ? c.flags_codigo.reduce((total: number, flag: any) => {
+              if (flag.severidad === 'CRITICA') return total + 30
+              if (flag.severidad === 'ALTA') return total + 20
+              if (flag.severidad === 'MEDIA') return total + 10
+              return total + 5
+            }, 0)
+          : 0,
+        total_alertas: Array.isArray(c.flags_codigo) ? c.flags_codigo.length : 0,
+        alertas_criticas: Array.isArray(c.flags_codigo)
+          ? c.flags_codigo.filter((flag: any) => flag.severidad === 'CRITICA').length
+          : 0,
+        alertas_altas: Array.isArray(c.flags_codigo)
+          ? c.flags_codigo.filter((flag: any) => flag.severidad === 'ALTA').length
+          : 0,
+        url_proceso: c.url_proceso,
       }))
       setDynamicView({ mode: 'entity-contracts', data: { nit, name, contratos: secopContratos } })
     } catch {
@@ -429,6 +442,11 @@ export default function HomePage() {
                         </button>
                       ))}
                 </div>
+
+                {/* ── Interactive charts ──────────────────────────── */}
+                {!backendEntitiesLoading && entities.length > 0 && (
+                  <AllEntitiesCharts entities={entities} />
+                )}
               </motion.div>
             ) : (
               /* ── Selected-entity contract list ───────────────────────── */

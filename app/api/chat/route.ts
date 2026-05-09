@@ -70,10 +70,19 @@ Responde siempre en español.
 Tienes acceso a la API SECOP II (${SECOP_SCHEMA_HINT}).
 Cuando el usuario pida cualquier análisis, listado, conteo o visualización de contratos, USA la herramienta consultar_secop con los parámetros SoQL adecuados.
 Cuando el usuario pida contratos de mayor riesgo, alto riesgo, mas alertas, o similares Y la base interna esté disponible, USA contratos_alto_riesgo; si no, USA consultar_secop con $order por precio_base DESC.
-Cuando pidan una gráfica o visualización específica, USA la herramienta generar_grafica (primero obtén datos con consultar_secop si es necesario).
+Cuando pidan una gráfica o visualización específica (incluyendo "entidades con más contratos", "top entidades por contratación", "grafica de entidades"), SIEMPRE:
+  1. Primero usa consultar_secop con $select="entidad,count(*) as total" $group="entidad" $order="total DESC" $limit=20 para obtener los datos.
+  2. Luego OBLIGATORIAMENTE llama generar_grafica con chartType="bar", xKey="entidad", yKey="total" y los datos obtenidos.
 Cuando el usuario pida: análisis general, qué análisis hay disponibles, informe general, diagnóstico, resumen del sistema, estadísticas globales, panorama general — USA la herramienta analizar_sistema. Incluye tus observaciones clave como insights.
-Cuando el usuario pida entidades con más alertas, entidades con más red flags, entidades de mayor riesgo, ranking de entidades por riesgo, o similares — USA la herramienta listar_entidades_alertas.
-Siempre devuelve el resultado con la herramienta; NO inventes datos.`,
+Cuando el usuario pida entidades con más alertas, entidades con más red flags, entidades de mayor riesgo, ranking de entidades por riesgo — USA listar_entidades_alertas. Si además pide gráfica, TAMBIÉN llama generar_grafica después.
+Siempre devuelve el resultado con la herramienta; NO inventes datos.
+IMPORTANTE — CIUDADES Y UBICACIONES:
+  • Para filtrar por ciudad/municipio SIEMPRE usa el campo ciudad_de_la_unidad_de (NUNCA ciudad_entidad).
+  • ANTES de construir el where por ciudad, llama a explorar_campo con campo="ciudad_de_la_unidad_de" para obtener el nombre exacto como aparece en SECOP (puede ser "Bogotá D.C.", "BOGOTÁ", etc.). Filtra por el valor más cercano al pedido.
+  • Ejemplo de flujo: usuario pide contratos en Bogotá → primero explorar_campo(campo="ciudad_de_la_unidad_de") → luego consultar_secop(where:"ciudad_de_la_unidad_de='<valor exacto>'"").
+IMPORTANTE — ESTRUCTURA DE DATOS:
+  • Si no estás seguro del nombre exacto de un campo o sus posibles valores, usa PRIMERO ver_estructura_datos.
+  • Para conocer los valores exactos de cualquier campo (ciudades, modalidades, estados, entidades), usa explorar_campo.`,
       messages: modelMessages,
       maxSteps: 5,
       tools: {
@@ -155,9 +164,10 @@ Siempre devuelve el resultado con la herramienta; NO inventes datos.`,
 Usa este tool para: listas de contratos, conteos, rankings, filtros por entidad/modalidad/valor/fecha, contratos por proveedor, etc.
 Ejemplos de params:
  - 5 contratos de mayor valor: {select:"*", order:"precio_base DESC", limit:5}
- - contratos de Bogotá: {where:"ciudad_entidad='Bogotá'", limit:20}
+ - contratos de una ciudad: {where:"ciudad_de_la_unidad_de='Bogotá D.C.'", limit:20}  ← SIEMPRE usa ciudad_de_la_unidad_de para filtrar por ciudad
  - conteo por modalidad: {select:"modalidad_de_contratacion,count(*) as total", group:"modalidad_de_contratacion", order:"total DESC"}
- - buscar texto libre: {q:"consultoría ambiental", limit:10}`,
+ - buscar texto libre: {q:"consultoría ambiental", limit:10}
+NOTA: Para filtros de ciudad/ubicación usa SIEMPRE el campo ciudad_de_la_unidad_de, nunca ciudad_entidad.`,
           parameters: z.object({
             select: z.string().optional().describe('$select SoQL. Ej: "entidad,precio_base" o "modalidad_de_contratacion,count(*) as total"'),
             where: z.string().optional().describe('$where SoQL. Ej: "precio_base > 500000000"'),
@@ -350,6 +360,67 @@ Usar cuando el usuario pida: análisis general, qué análisis se puede obtener,
                 },
               ],
               insights,
+            }
+          },
+        } as any),
+        ver_estructura_datos: tool({
+          description: 'Obtener la estructura completa y campos disponibles del dataset SECOP II con valores de ejemplo. El registro de muestra siempre incluye ciudad_de_la_unidad_de para mostrar el formato exacto del campo de ciudad. Usar ANTES de hacer cualquier consulta cuando no estés seguro del nombre exacto de un campo, su formato o sus posibles valores.',
+          parameters: z.object({}),
+          execute: async () => {
+            console.log('[chat] Tool: ver_estructura_datos called')
+            // Fetch a record guaranteed to have city data so the LLM sees the exact city field format
+            const qs = new URLSearchParams({
+              '$where': "ciudad_de_la_unidad_de IS NOT NULL AND ciudad_de_la_unidad_de != ''",
+              '$order': 'fecha_de_publicacion_del DESC',
+              '$limit': '1',
+            })
+            const res = await fetch(`https://www.datos.gov.co/resource/p6dx-8zbt.json?${qs.toString()}`)
+            if (!res.ok) throw new Error(`Error fetching schema: ${res.status}`)
+            const records: Record<string, any>[] = await res.json()
+            if (!records || records.length === 0) throw new Error('No se obtuvieron registros de ejemplo')
+            const sample = records[0]
+            const campos = Object.entries(sample).map(([campo, valor]) => ({
+              campo,
+              tipo: Array.isArray(valor) ? 'array' : typeof valor,
+              ejemplo: String(valor).slice(0, 120),
+            }))
+            return {
+              type: 'schema-info',
+              total_campos: campos.length,
+              campos,
+              nota: 'Estos son los campos reales del dataset SECOP II. Usa los nombres EXACTOS (respetando tildes y caracteres especiales) al construir consultas. Para filtrar por ciudad usa SIEMPRE ciudad_de_la_unidad_de, nunca ciudad_entidad. Usa explorar_campo para ver los valores disponibles de cualquier campo antes de filtrar.',
+            }
+          },
+        } as any),
+        explorar_campo: tool({
+          description: `Obtener los valores más frecuentes (top N) de un campo específico del dataset SECOP II junto con su conteo de registros.
+Usar SIEMPRE antes de filtrar por un campo cuando no se conoce el valor exacto:
+  - ciudad_de_la_unidad_de → nombre exacto de la ciudad (ej. "Bogotá D.C.", "MEDELLÍN")
+  - modalidad_de_contratacion → nombres exactos de modalidades
+  - estado_del_procedimiento → estados posibles del procedimiento
+  - departamento_entidad → nombres de departamentos
+El resultado muestra el valor tal como aparece en SECOP y cuántos contratos lo tienen.`,
+          parameters: z.object({
+            campo: z.string().describe('Nombre exacto del campo a explorar. Ej: "ciudad_de_la_unidad_de", "modalidad_de_contratacion", "estado_del_procedimiento", "departamento_entidad"'),
+            top: z.number().optional().describe('Número de valores distintos a retornar (máx 50). Default 20.'),
+          }),
+          execute: async ({ campo, top = 20 }: { campo: string; top?: number }) => {
+            console.log('[chat] Tool: explorar_campo called, campo:', campo, 'top:', top)
+            const params = new URLSearchParams({
+              '$select': `${campo},count(*) as total`,
+              '$group': campo,
+              '$order': 'total DESC',
+              '$limit': String(Math.min(top, 50)),
+              '$where': `${campo} IS NOT NULL AND ${campo} != ''`,
+            })
+            const res = await fetch(`https://www.datos.gov.co/resource/p6dx-8zbt.json?${params.toString()}`)
+            if (!res.ok) throw new Error(`Error explorando campo "${campo}": ${res.status}`)
+            const data: Record<string, any>[] = await res.json()
+            return {
+              type: 'field-values',
+              campo,
+              valores: data.map((row) => ({ valor: row[campo], total: Number(row.total) })),
+              nota: `Usa exactamente estos valores (respetando mayúsculas, tildes y espacios) en el parámetro where de consultar_secop. Para ciudades: where → ciudad_de_la_unidad_de='<valor exacto>'.`,
             }
           },
         } as any),
