@@ -35,6 +35,24 @@ const KEYWORDS: { word: string; severity: AlertSeverity; tooltip: string }[] = [
   { word: 'obra', severity: 'info', tooltip: 'Contrato de construccion' },
 ]
 
+type Segment = {
+  text: string
+  type: 'normal' | 'highlight'
+  severity?: AlertSeverity
+  tooltip?: string
+  flagId?: string
+  isFlagEvidence?: boolean
+}
+
+type MatchEntry = {
+  start: number
+  end: number
+  severity: AlertSeverity
+  tooltip: string
+  flagId: string
+  isFlagEvidence: boolean
+}
+
 export function HighlightedText({
   text,
   flags,
@@ -43,77 +61,90 @@ export function HighlightedText({
   onHighlightRef,
 }: HighlightedTextProps) {
   const processedText = useMemo(() => {
-    if (!text) return []
+    if (!text) return [] as Segment[]
 
     const lowerText = text.toLowerCase()
-    const segments: {
-      text: string
-      type: 'normal' | 'highlight'
-      severity?: AlertSeverity
-      tooltip?: string
-      flagId?: string
-    }[] = []
+    const segments: Segment[] = []
+    const matches: MatchEntry[] = []
 
-    // Find all keyword matches
-    const matches: { start: number; end: number; keyword: typeof KEYWORDS[0] }[] = []
-
+    // 1. Static keyword matches
     for (const keyword of KEYWORDS) {
       let index = 0
       while ((index = lowerText.indexOf(keyword.word, index)) !== -1) {
         matches.push({
           start: index,
           end: index + keyword.word.length,
-          keyword,
+          severity: keyword.severity,
+          tooltip: keyword.tooltip,
+          flagId: `keyword-${keyword.word}`,
+          isFlagEvidence: false,
         })
         index += keyword.word.length
       }
     }
 
-    // Sort matches by start position
-    matches.sort((a, b) => a.start - b.start)
+    // 2. Flag evidence matches – take higher visual priority
+    for (const flag of flags) {
+      if (!flag.evidence) continue
+      const evidenceLower = flag.evidence.toLowerCase().trim()
+      if (evidenceLower.length < 8) continue // skip very short fragments
+      let index = 0
+      while ((index = lowerText.indexOf(evidenceLower, index)) !== -1) {
+        matches.push({
+          start: index,
+          end: index + evidenceLower.length,
+          severity: flag.severity,
+          tooltip: flag.title || flag.description || '',
+          flagId: flag.id,
+          isFlagEvidence: true,
+        })
+        index += evidenceLower.length
+      }
+    }
 
-    // Remove overlapping matches
-    const filteredMatches: typeof matches = []
+    // Sort: by start position; flag evidence beats keywords on ties; longer spans win
+    matches.sort((a, b) => {
+      if (a.start !== b.start) return a.start - b.start
+      if (a.isFlagEvidence !== b.isFlagEvidence) return a.isFlagEvidence ? -1 : 1
+      return (b.end - b.start) - (a.end - a.start)
+    })
+
+    // Remove overlaps – flag evidence replaces keywords when they conflict
+    const filtered: MatchEntry[] = []
     for (const match of matches) {
-      const lastMatch = filteredMatches[filteredMatches.length - 1]
-      if (!lastMatch || match.start >= lastMatch.end) {
-        filteredMatches.push(match)
+      const last = filtered[filtered.length - 1]
+      if (!last || match.start >= last.end) {
+        filtered.push(match)
+      } else if (match.isFlagEvidence && !last.isFlagEvidence) {
+        filtered[filtered.length - 1] = match
       }
     }
 
     // Build segments
     let currentIndex = 0
-    for (const match of filteredMatches) {
-      // Add normal text before match
+    for (const match of filtered) {
       if (match.start > currentIndex) {
-        segments.push({
-          text: text.slice(currentIndex, match.start),
-          type: 'normal',
-        })
+        segments.push({ text: text.slice(currentIndex, match.start), type: 'normal' })
       }
-
-      // Add highlighted text
       segments.push({
         text: text.slice(match.start, match.end),
         type: 'highlight',
-        severity: match.keyword.severity,
-        tooltip: match.keyword.tooltip,
-        flagId: `keyword-${match.keyword.word}`,
+        severity: match.severity,
+        tooltip: match.tooltip,
+        flagId: match.flagId,
+        isFlagEvidence: match.isFlagEvidence,
       })
 
       currentIndex = match.end
     }
 
-    // Add remaining text
     if (currentIndex < text.length) {
-      segments.push({
-        text: text.slice(currentIndex),
-        type: 'normal',
-      })
+      segments.push({ text: text.slice(currentIndex), type: 'normal' })
     }
 
     return segments
-  }, [text])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, flags])
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -124,6 +155,7 @@ export function HighlightedText({
           }
 
           const isSelected = selectedFlag?.id === segment.flagId
+          const isEvidence = segment.isFlagEvidence
 
           return (
             <Tooltip key={index}>
@@ -132,18 +164,24 @@ export function HighlightedText({
                   ref={(el) => segment.flagId && onHighlightRef?.(segment.flagId, el)}
                   className={cn(
                     'cursor-help rounded px-0.5 py-0.5 transition-all',
-                    segment.severity === 'info' && 'bg-blue-500/20 hover:bg-blue-500/30',
-                    segment.severity === 'warning' && 'bg-risk-medio/20 hover:bg-risk-medio/30',
-                    segment.severity === 'danger' && 'bg-risk-alto/20 hover:bg-risk-alto/30',
-                    segment.severity === 'critical' && 'bg-risk-critico/20 hover:bg-risk-critico/30',
-                    isSelected && 'ring-2 ring-primary ring-offset-1'
+                    // Flag evidence: stronger red highlight
+                    isEvidence && segment.severity === 'critical' && 'bg-risk-critico/30 text-risk-critico underline decoration-risk-critico decoration-2',
+                    isEvidence && segment.severity === 'danger'   && 'bg-risk-alto/30 text-risk-alto underline decoration-risk-alto decoration-2',
+                    isEvidence && segment.severity === 'warning'  && 'bg-risk-medio/25 text-risk-medio underline decoration-risk-medio',
+                    isEvidence && segment.severity === 'info'     && 'bg-blue-500/20 text-blue-600 underline',
+                    // Static keyword matches: lighter
+                    !isEvidence && segment.severity === 'info'     && 'bg-blue-500/20 hover:bg-blue-500/30',
+                    !isEvidence && segment.severity === 'warning'  && 'bg-risk-medio/20 hover:bg-risk-medio/30',
+                    !isEvidence && segment.severity === 'danger'   && 'bg-risk-alto/20 hover:bg-risk-alto/30',
+                    !isEvidence && segment.severity === 'critical' && 'bg-risk-critico/20 hover:bg-risk-critico/30',
+                    isSelected && 'ring-2 ring-primary ring-offset-1',
                   )}
                 >
                   {segment.text}
                 </span>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs">
-                <p className="text-xs">{segment.tooltip}</p>
+                <p className="text-xs">{isEvidence ? `⚠ Alerta: ${segment.tooltip}` : segment.tooltip}</p>
               </TooltipContent>
             </Tooltip>
           )

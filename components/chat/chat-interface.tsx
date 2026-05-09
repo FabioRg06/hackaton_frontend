@@ -17,59 +17,128 @@ interface ChatInterfaceProps {
   onExpandChange: (expanded: boolean) => void
   onDynamicUIChange: (mode: ViewMode, data: unknown) => void
   contracts: ContractWithRisk[]
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 const SUGGESTED_PROMPTS = [
-  'Cuantos contratos hay en total?',
+  'Los 5 contratos con mayor valor en SECOP',
+  'Gráfica de contratos por modalidad de contratación',
+  'Contratos de contratación directa en Bogotá (últimos 20)',
   'Muestrame los contratos de mayor riesgo',
-  'Analisis exploratorio de contratos recientes',
-  'Cuales entidades tienen mas contratos?',
-  'Buscar contratos de contratacion directa',
+  'Top 10 entidades con más contratos registrados',
+  'Contratos adjudicados con un solo oferente',
 ]
 
-// Helper to extract text from message parts
-function getMessageText(message: { parts?: Array<{ type: string; text?: string }> }): string {
+function getToolMessage(part: {
+  type?: string
+  output?: Record<string, unknown>
+  state?: string
+  toolName?: string
+}): string {
+  if (part.state !== 'output-available' || !part.output) return ''
+  if (!part.type?.startsWith('tool-')) return ''
+
+  if (part.output.type === 'count' && typeof part.output.total === 'number') {
+    return `Hay ${new Intl.NumberFormat('es-CO').format(part.output.total)} contratos en total.`
+  }
+
+  if (part.output.type === 'contract-list' && typeof part.output.count === 'number') {
+    return `Encontré ${new Intl.NumberFormat('es-CO').format(part.output.count)} contratos para tu consulta.`
+  }
+
+  return ''
+}
+
+// Helper to extract visible text from message parts
+function getMessageText(message: {
+  parts?: Array<{
+    type: string
+    text?: string
+    state?: string
+    output?: Record<string, unknown>
+    toolName?: string
+  }>
+}): string {
   if (!message.parts || !Array.isArray(message.parts)) return ''
-  return message.parts
+
+  const textParts = message.parts
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text' && typeof p.text === 'string')
     .map((p) => p.text)
     .join('')
+
+  if (textParts.trim()) return textParts
+
+  return message.parts
+    .filter((p) => p.type.startsWith('tool-'))
+    .map((p) => getToolMessage(p))
+    .filter(Boolean)
+    .join('\n')
 }
 
 export function ChatInterface({
   expanded,
   onExpandChange,
   onDynamicUIChange,
+  open: openProp,
+  onOpenChange,
 }: ChatInterfaceProps) {
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpenInternal, setIsOpenInternal] = useState(false)
+  const isOpen = openProp !== undefined ? openProp : isOpenInternal
+  const setIsOpen = (value: boolean) => {
+    setIsOpenInternal(value)
+    onOpenChange?.(value)
+  }
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const processedToolCallIdsRef = useRef<Set<string>>(new Set())
+
+  const handleToolResult = (result: Record<string, unknown> | undefined) => {
+    if (!result?.type) return
+
+    const uiType = result.type as string
+
+    if (uiType === 'contract-list' && result.contracts) {
+      onDynamicUIChange('contract-list', result.contracts)
+    } else if (uiType === 'contract-detail' && result.contract) {
+      onDynamicUIChange('contract-detail', result.contract)
+    } else if (uiType === 'exploratory' && result.stats) {
+      onDynamicUIChange('exploratory', { stats: result.stats, contracts: result.contracts })
+    } else if (uiType === 'entity-list' && result.entities) {
+      onDynamicUIChange('entity-list', result.entities)
+    } else if (uiType === 'count' && typeof result.total === 'number') {
+      onDynamicUIChange('count', result.total)
+    } else if (uiType === 'query-result') {
+      onDynamicUIChange('query-result', { data: result.data, count: result.count })
+    } else if (uiType === 'secop-full-list') {
+      onDynamicUIChange('secop-full-list', { data: result.data, count: result.count, label: result.label })
+    } else if (uiType === 'secop-table') {
+      onDynamicUIChange('secop-table', { data: result.data, count: result.count, label: result.label })
+    } else if (uiType === 'secop-chart') {
+      onDynamicUIChange('secop-chart', {
+        chartType: result.chartType,
+        title: result.title,
+        data: result.data,
+        xKey: result.xKey,
+        yKey: result.yKey,
+        color: result.color,
+        yLabel: result.yLabel,
+      })
+    } else if (uiType === 'high-risk-contract-list') {
+      onDynamicUIChange('high-risk-contract-list', { contratos: result.contratos, total: result.total })
+    } else if (uiType === 'analysis-report') {
+      onDynamicUIChange('analysis-report', result)
+    }
+  }
 
   const { messages, sendMessage, status, error } = useChat({
     transport: new DefaultChatTransport({ api: '/api/chat' }),
     onToolCall: ({ toolCall }) => {
       // Handle tool results to update UI dynamically
       if (toolCall.dynamic) return
-      
-      const result = toolCall.result as Record<string, unknown> | undefined
-      if (!result?.type) return
 
-      const uiType = result.type as string
-      
-      if (uiType === 'contract-list' && result.contracts) {
-        onDynamicUIChange('contract-list', result.contracts)
-      } else if (uiType === 'contract-detail' && result.contract) {
-        onDynamicUIChange('contract-detail', result.contract)
-      } else if (uiType === 'exploratory' && result.stats) {
-        onDynamicUIChange('exploratory', { stats: result.stats, contracts: result.contracts })
-      } else if (uiType === 'entity-list' && result.entities) {
-        onDynamicUIChange('entity-list', result.entities)
-      } else if (uiType === 'count' && typeof result.total === 'number') {
-        onDynamicUIChange('count', result.total)
-      } else if (uiType === 'query-result') {
-        onDynamicUIChange('query-result', { data: result.data, count: result.count })
-      }
+      handleToolResult(toolCall.result as Record<string, unknown> | undefined)
     },
   })
 
@@ -87,35 +156,35 @@ export function ChatInterface({
     }
   }, [isOpen])
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isOpen) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
+
   // Process tool results from messages to update UI
   useEffect(() => {
     for (const message of messages) {
       if (message.role === 'assistant' && message.parts) {
         for (const part of message.parts) {
-          if (part.type === 'tool-invocation' && part.state === 'output-available') {
-            const result = part.output as Record<string, unknown> | undefined
-            if (!result?.type) continue
+          if (part.type.startsWith('tool-') && part.state === 'output-available') {
+            const toolCallId = 'toolCallId' in part && typeof part.toolCallId === 'string'
+              ? part.toolCallId
+              : undefined
+            if (toolCallId && processedToolCallIdsRef.current.has(toolCallId)) continue
+            if (toolCallId) processedToolCallIdsRef.current.add(toolCallId)
 
-            const uiType = result.type as string
-            
-            if (uiType === 'contract-list' && result.contracts) {
-              onDynamicUIChange('contract-list', result.contracts)
-            } else if (uiType === 'contract-detail' && result.contract) {
-              onDynamicUIChange('contract-detail', result.contract)
-            } else if (uiType === 'exploratory') {
-              onDynamicUIChange('exploratory', { stats: result.stats, contracts: result.contracts })
-            } else if (uiType === 'entity-list' && result.entities) {
-              onDynamicUIChange('entity-list', result.entities)
-            } else if (uiType === 'count' && typeof result.total === 'number') {
-              onDynamicUIChange('count', result.total)
-            } else if (uiType === 'query-result') {
-              onDynamicUIChange('query-result', { data: result.data, count: result.count })
-            }
+            handleToolResult(part.output as Record<string, unknown> | undefined)
           }
         }
       }
     }
-  }, [messages, onDynamicUIChange])
+  }, [messages])
 
   const handleSend = async (text?: string) => {
     const messageText = text || input.trim()
@@ -149,6 +218,25 @@ export function ChatInterface({
               </div>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Floating close button visible when chat is open */}
+      <AnimatePresence>
+        {isOpen && (
+          <motion.button
+            key="chat-close-fab"
+            initial={{ y: 20, opacity: 0, scale: 0.8 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
+            exit={{ y: 20, opacity: 0, scale: 0.8 }}
+            transition={{ duration: 0.15 }}
+            className="fixed bottom-8 right-8 z-[60] flex h-10 w-10 items-center justify-center rounded-full bg-background/90 backdrop-blur-xl border border-border shadow-lg hover:bg-destructive/10 hover:border-destructive/50 hover:text-destructive transition-colors"
+            onClick={() => setIsOpen(false)}
+            aria-label="Cerrar chatbot"
+            title="Cerrar chatbot"
+          >
+            <X className="h-4 w-4" />
+          </motion.button>
         )}
       </AnimatePresence>
 

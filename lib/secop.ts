@@ -7,6 +7,11 @@ const SECOP_API_BASE = 'https://www.datos.gov.co/resource/p6dx-8zbt.json'
 const cache = new Map<string, { data: unknown; timestamp: number }>()
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
+function normalizeOrderBy(orderBy?: string): string {
+  if (!orderBy) return 'fecha_de_publicacion_del DESC'
+  return orderBy.replace(/fecha_de_firma/gi, 'fecha_de_publicacion_del')
+}
+
 function getCacheKey(params: Record<string, string>): string {
   return JSON.stringify(params)
 }
@@ -342,7 +347,7 @@ export async function searchContracts(options: {
   const params: Record<string, string> = {
     $limit: (options.limit || 50).toString(),
     $offset: (options.offset || 0).toString(),
-    $order: options.orderBy || 'fecha_de_firma DESC',
+    $order: normalizeOrderBy(options.orderBy),
   }
 
   const whereConditions: string[] = []
